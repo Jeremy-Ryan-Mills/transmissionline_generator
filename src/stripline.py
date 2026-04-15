@@ -1,72 +1,72 @@
 """
-Stripline Transmission Line Layout Generator for KLayout
-=========================================================
+Stripline Transmission Line Crosstalk Layout Generator for KLayout
+==================================================================
 HOW TO RUN:
   1. Open KLayout -> File -> New Layout (accept defaults)
   2. Macros -> Macro Editor (F5)
   3. Paste this script, press Run
 
-WHAT IS STRIPLINE:
-  Unlike microstrip (trace on top, one ground below), stripline buries
-  the signal trace inside the dielectric, sandwiched between two ground
-  planes above and below. This gives better shielding and no radiation.
-
-  In your 4-layer stackup:
-    m1  (layer 1/0) = bottom ground plane    <- you already have this
-    m2  (layer 2/0) = top ground plane       <- you already have this
-    sig (layer 3/0) = signal trace buried    <- NEW layer (Int1 or Int2)
-
-  In KLayout 2D top-down view, all three layers are overlaid.
-  The sig layer sits visually between m1 and m2 in the layer panel.
-
 STRUCTURE:
-  Both m1 and m2 are solid ground plane rectangles (same footprint).
-  The sig layer is a narrow strip running down the center — this is
-  the buried transmission line.
+  Two parallel buried signal traces (aggressor + victim) sandwiched
+  between two solid ground planes (m1 bottom, m2 top).
+  Vary TRACE_SEPARATION between simulation runs to sweep crosstalk vs distance.
 
-STRIPLINE WIDTH NOTE:
-  Stripline characteristic impedance depends on trace width, dielectric
-  thickness, and er. For 50 ohm stripline the trace is narrower than
-  microstrip because it has ground on both sides.
-  Use a stripline calculator with your stackup to get the exact width.
-  For Core-039 (1.065mm, er=4.6) with ground planes on each side:
-    Z0 ~ 50 ohm at roughly w ~ 0.8-1.2mm (run calculator to verify)
+LAYER MAPPING (must match your Edit -> Layers panel):
+  m1  (1/0) = bottom ground plane
+  m2  (2/0) = top ground plane
+  sig (3/0) = buried signal traces — add this layer in Edit -> Layers
+              maps to Int1 or Int2 in your stackup
 """
 
 import pya
 import math
 
 # ===========================================================================
-# PARAMETERS
+# PARAMETERS — edit these
 # ===========================================================================
 
 LAYER_M1  = (1, 0)   # bottom ground plane
 LAYER_M2  = (2, 0)   # top ground plane
-LAYER_SIG = (3, 0)   # buried signal trace (Int1 or Int2 in your stackup)
+LAYER_SIG = (3, 0)   # buried signal traces (Int1 or Int2)
 
-# Signal trace
-TRACE_WIDTH  = 1.0    # mm  adjust for 50 ohm — run stripline calculator
-TRACE_LENGTH = 60.0   # mm  total length of the transmission line
+# Signal traces
+TRACE_WIDTH      = 1.0    # mm  width of each trace (run stripline calculator for 50 ohm)
+TRACE_LENGTH     = 60.0   # mm  length of each trace
+TRACE_SEPARATION = 2.0    # mm  edge-to-edge gap between aggressor and victim
+                          #     VARY THIS for crosstalk sweep
 
-# Ground plane margin around the trace on each side
-GND_MARGIN = 5.0      # mm  how much wider the ground planes are vs trace
+# Ground plane margin outside the outermost trace edges
+GND_MARGIN = 5.0          # mm
 
-# Feed pads at each end (wider pad for port attachment)
+# Port pads at each end of each trace (makes simulation port attachment easier)
 ADD_PADS   = True
-PAD_WIDTH  = 2.0      # mm  wider pad at port ends
-PAD_LENGTH = 2.0      # mm  length of pad
+PAD_WIDTH  = 2.0          # mm  pad wider than trace for port attach
+PAD_LENGTH = 2.0          # mm  pad length at each end
 
 # ===========================================================================
 # DERIVED
 # ===========================================================================
-GND_WIDTH  = TRACE_WIDTH + 2 * GND_MARGIN   # total ground plane width
+# Total span of both traces + gap
+PAIR_SPAN  = 2 * TRACE_WIDTH + TRACE_SEPARATION
+
+# Ground plane spans both traces plus margin on each outer edge
+GND_WIDTH  = PAIR_SPAN + 2 * GND_MARGIN
 TOTAL_LENGTH = TRACE_LENGTH
 
-Y_CENTER   = 0.0
-GND_Y_BOT  = Y_CENTER - GND_WIDTH / 2.0
-GND_Y_TOP  = Y_CENTER + GND_WIDTH / 2.0
-SIG_Y_BOT  = Y_CENTER - TRACE_WIDTH / 2.0
-SIG_Y_TOP  = Y_CENTER + TRACE_WIDTH / 2.0
+# Y positions — center the pair on y=0
+# Aggressor (bottom trace)
+AGG_Y_CENTER = -(TRACE_SEPARATION / 2.0 + TRACE_WIDTH / 2.0)
+AGG_Y_BOT    = AGG_Y_CENTER - TRACE_WIDTH / 2.0
+AGG_Y_TOP    = AGG_Y_CENTER + TRACE_WIDTH / 2.0
+
+# Victim (top trace)
+VIC_Y_CENTER = +(TRACE_SEPARATION / 2.0 + TRACE_WIDTH / 2.0)
+VIC_Y_BOT    = VIC_Y_CENTER - TRACE_WIDTH / 2.0
+VIC_Y_TOP    = VIC_Y_CENTER + TRACE_WIDTH / 2.0
+
+# Ground plane Y extents
+GND_Y_BOT = -GND_WIDTH / 2.0
+GND_Y_TOP = +GND_WIDTH / 2.0
 
 # ===========================================================================
 # HELPERS
@@ -98,7 +98,7 @@ def run():
         cell.clear()
         print(f"Cleared cell: {cell.name}")
     else:
-        cell = layout.create_cell("STRIPLINE_TL")
+        cell = layout.create_cell("STRIPLINE_CROSSTALK")
         cv.cell_name = cell.name
         print(f"Created cell: {cell.name}")
 
@@ -110,62 +110,68 @@ def run():
     n = 0
 
     # -----------------------------------------------------------------------
-    # 1. M1 — bottom ground plane (solid rectangle)
+    # 1. M1 — bottom ground plane (one solid rectangle, spans both traces)
     # -----------------------------------------------------------------------
     cell.shapes(lm1).insert(box(0, GND_Y_BOT, TOTAL_LENGTH, GND_Y_TOP, u))
     n += 1
-    print(f"[m1] Bottom ground plane: {TOTAL_LENGTH:.2f} x {GND_WIDTH:.2f} mm")
+    print(f"[m1] Bottom GND: {TOTAL_LENGTH:.2f} x {GND_WIDTH:.2f} mm")
 
     # -----------------------------------------------------------------------
-    # 2. M2 — top ground plane (same footprint as m1)
+    # 2. M2 — top ground plane (same footprint)
     # -----------------------------------------------------------------------
     cell.shapes(lm2).insert(box(0, GND_Y_BOT, TOTAL_LENGTH, GND_Y_TOP, u))
     n += 1
-    print(f"[m2] Top ground plane: {TOTAL_LENGTH:.2f} x {GND_WIDTH:.2f} mm")
+    print(f"[m2] Top GND: {TOTAL_LENGTH:.2f} x {GND_WIDTH:.2f} mm")
 
     # -----------------------------------------------------------------------
-    # 3. SIG — buried signal trace (centered between ground planes)
+    # 3. SIG — aggressor trace (bottom)
     # -----------------------------------------------------------------------
-    cell.shapes(lsig).insert(box(0, SIG_Y_BOT, TOTAL_LENGTH, SIG_Y_TOP, u))
+    cell.shapes(lsig).insert(box(0, AGG_Y_BOT, TOTAL_LENGTH, AGG_Y_TOP, u))
     n += 1
-    print(f"[sig] Signal trace: {TOTAL_LENGTH:.2f} x {TRACE_WIDTH:.2f} mm")
-    print(f"      y={SIG_Y_BOT:.3f} to {SIG_Y_TOP:.3f} (centered at y=0)")
+    print(f"[sig] Aggressor: y={AGG_Y_BOT:.3f} to {AGG_Y_TOP:.3f}  center={AGG_Y_CENTER:.3f}")
 
     # -----------------------------------------------------------------------
-    # 4. Optional port pads on SIG layer (wider rectangle at each end)
-    #    Makes it easier to attach simulation ports
+    # 4. SIG — victim trace (top)
+    # -----------------------------------------------------------------------
+    cell.shapes(lsig).insert(box(0, VIC_Y_BOT, TOTAL_LENGTH, VIC_Y_TOP, u))
+    n += 1
+    print(f"[sig] Victim:    y={VIC_Y_BOT:.3f} to {VIC_Y_TOP:.3f}  center={VIC_Y_CENTER:.3f}")
+
+    print(f"      Edge-to-edge separation: {TRACE_SEPARATION:.3f} mm")
+
+    # -----------------------------------------------------------------------
+    # 5. Port pads on each trace end
     # -----------------------------------------------------------------------
     if ADD_PADS:
-        # Left pad
-        cell.shapes(lsig).insert(box(
-            0, Y_CENTER - PAD_WIDTH/2,
-            PAD_LENGTH, Y_CENTER + PAD_WIDTH/2, u))
-        # Right pad
-        cell.shapes(lsig).insert(box(
-            TOTAL_LENGTH - PAD_LENGTH, Y_CENTER - PAD_WIDTH/2,
-            TOTAL_LENGTH, Y_CENTER + PAD_WIDTH/2, u))
-        n += 2
-        print(f"[sig] Port pads: {PAD_LENGTH:.2f} x {PAD_WIDTH:.2f} mm at each end")
+        for y_center in [AGG_Y_CENTER, VIC_Y_CENTER]:
+            py1 = y_center - PAD_WIDTH / 2.0
+            py2 = y_center + PAD_WIDTH / 2.0
+            # Left pad
+            cell.shapes(lsig).insert(box(0, py1, PAD_LENGTH, py2, u))
+            # Right pad
+            cell.shapes(lsig).insert(box(TOTAL_LENGTH - PAD_LENGTH, py1, TOTAL_LENGTH, py2, u))
+            n += 2
+        print(f"[sig] Port pads: {PAD_LENGTH:.2f} x {PAD_WIDTH:.2f} mm at each end of each trace")
 
     mw.current_view().zoom_fit()
 
     print("\n" + "=" * 55)
-    print("  SUCCESS — Stripline Transmission Line")
+    print("  SUCCESS — Stripline Crosstalk Layout")
     print("=" * 55)
-    print(f"  Trace width   : {TRACE_WIDTH:.2f} mm")
-    print(f"  Trace length  : {TRACE_LENGTH:.2f} mm")
-    print(f"  GND width     : {GND_WIDTH:.2f} mm")
-    print(f"  GND margin    : {GND_MARGIN:.2f} mm each side")
-    print(f"  Total shapes  : {n}")
+    print(f"  Trace width      : {TRACE_WIDTH:.2f} mm")
+    print(f"  Trace length     : {TRACE_LENGTH:.2f} mm")
+    print(f"  Trace separation : {TRACE_SEPARATION:.2f} mm  <- vary for sweep")
+    print(f"  GND width        : {GND_WIDTH:.2f} mm")
+    print(f"  GND margin       : {GND_MARGIN:.2f} mm each side")
+    print(f"  Total shapes     : {n}")
     print("=" * 55)
     print("  LAYER SUMMARY:")
     print(f"  m1  ({LAYER_M1[0]}/{LAYER_M1[1]}) = bottom ground plane")
     print(f"  m2  ({LAYER_M2[0]}/{LAYER_M2[1]}) = top ground plane")
-    print(f"  sig ({LAYER_SIG[0]}/{LAYER_SIG[1]}) = buried signal trace")
+    print(f"  sig ({LAYER_SIG[0]}/{LAYER_SIG[1]}) = aggressor + victim traces")
     print("=" * 55)
-    print("  NOTE: In KLayout all 3 layers render as overlapping 2D shapes.")
-    print("  The stackup definition encodes the vertical order.")
-    print("  sig layer should map to Int1 or Int2 in your layer setup.")
+    print("  CROSSTALK SWEEP: change TRACE_SEPARATION and rerun")
+    print("  Suggested values: 1x, 2x, 3x, 5x trace width")
     print("=" * 55)
 
 run()

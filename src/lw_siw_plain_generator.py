@@ -1,21 +1,21 @@
 """
-SIW Leaky Wave Waveguide Layout Generator (No Slots) for KLayout
-=================================================================
+SIW Leaky Wave Waveguide (No Slots) Crosstalk Layout Generator for KLayout
+===========================================================================
 HOW TO RUN:
   1. Open KLayout -> File -> New Layout (accept defaults)
   2. Macros -> Macro Editor (F5)
   3. Paste this script, press Run
 
-STRUCTURE (left to right):
-  [microstrip feed] -> [taper] -> [SIW body, solid top] -> [taper] -> [microstrip feed]
+STRUCTURE:
+  Two parallel solid SIW waveguides (aggressor + victim).
+  Each has: [feed] -> [taper] -> [solid SIW body] -> [taper] -> [feed]
+  Shared m1 ground plane covers both.
+  Vary WAVEGUIDE_SEPARATION to sweep crosstalk vs distance.
 
 LAYER STRUCTURE:
-  m1   = solid ground plane (full rectangle, bottom copper)
-  m2   = top conductor:
-           - solid fill across full SIW width (no slots)
-           - taper polygons at each end
-           - narrow microstrip feed at each end
-  via1 = two rows of circles forming the SIW sidewalls
+  m1   = single solid ground plane (covers both waveguides)
+  m2   = top conductor for both waveguides (solid body, tapers, feeds)
+  via1 = sidewall via circles for both waveguides
 """
 
 import pya
@@ -33,24 +33,24 @@ VIA_DIAMETER = 0.3    # mm
 VIA_PITCH    = 0.6    # mm
 VIA_SEGMENTS = 64
 
-SIW_WIDTH   = 28.0    # mm  center-to-center between via rows
-SIW_LENGTH  = 60.0    # mm  length of SIW body
+SIW_WIDTH    = 28.0   # mm  center-to-center between via rows
+SIW_LENGTH   = 60.0   # mm  SIW body length (excludes tapers and feeds)
 
 TAPER_LENGTH = 10.0   # mm  length of each taper transition
 
-FEED_WIDTH  = 1.5     # mm  microstrip feed line width (~50 ohm)
-FEED_LENGTH = 10.0    # mm  feed stub length at each end
+FEED_WIDTH   = 1.5    # mm  microstrip feed line width (~50 ohm)
+FEED_LENGTH  = 10.0   # mm  feed stub length at each end
 
-GND_MARGIN  = 3.0     # mm  m1 margin outside via rows
+GND_MARGIN   = 3.0    # mm  m1 margin outside outermost via rows
+
+# Crosstalk sweep parameter
+WAVEGUIDE_SEPARATION = 5.0  # mm  edge-to-edge gap between the two SIW bodies
+                             #     VARY THIS for crosstalk sweep
 
 # ===========================================================================
 # DERIVED
 # ===========================================================================
 VIA_RADIUS = VIA_DIAMETER / 2.0
-
-Y_CENTER  = 0.0
-Y_TOP_ROW = Y_CENTER + SIW_WIDTH / 2.0
-Y_BOT_ROW = Y_CENTER - SIW_WIDTH / 2.0
 
 X_FEED_END   = FEED_LENGTH
 X_TAPER_END  = FEED_LENGTH + TAPER_LENGTH
@@ -61,8 +61,13 @@ X_TOTAL      = FEED_LENGTH + TAPER_LENGTH + SIW_LENGTH + TAPER_LENGTH + FEED_LEN
 X_VIA_START = X_TAPER_END
 X_VIA_END   = X_SIW_END
 
-M1_Y_BOT = Y_BOT_ROW - GND_MARGIN
-M1_Y_TOP = Y_TOP_ROW + GND_MARGIN
+# Y centers — aggressor bottom, victim top, symmetric about y=0
+AGG_Y_CENTER = -(WAVEGUIDE_SEPARATION / 2.0 + SIW_WIDTH / 2.0)
+VIC_Y_CENTER = +(WAVEGUIDE_SEPARATION / 2.0 + SIW_WIDTH / 2.0)
+
+# m1 spans both waveguides plus margin
+M1_Y_BOT = AGG_Y_CENTER - SIW_WIDTH / 2.0 - GND_MARGIN
+M1_Y_TOP = VIC_Y_CENTER + SIW_WIDTH / 2.0 + GND_MARGIN
 
 # ===========================================================================
 # HELPERS
@@ -85,6 +90,57 @@ def circle(cx, cy, r, n, u):
                              to_dbu(cy + r*math.sin(a), u)))
     return pya.Polygon(pts)
 
+def draw_siw_solid(cell, lm2, lvia, y_center, u, label):
+    """Draw one complete solid SIW waveguide centered on y_center."""
+    n = 0
+    y_top = y_center + SIW_WIDTH / 2.0
+    y_bot = y_center - SIW_WIDTH / 2.0
+
+    # Left feed
+    cell.shapes(lm2).insert(box(0, y_center - FEED_WIDTH/2,
+                                   X_FEED_END, y_center + FEED_WIDTH/2, u))
+    n += 1
+
+    # Left taper
+    cell.shapes(lm2).insert(poly([
+        (X_FEED_END,  y_center - FEED_WIDTH/2),
+        (X_FEED_END,  y_center + FEED_WIDTH/2),
+        (X_TAPER_END, y_top),
+        (X_TAPER_END, y_bot),
+    ], u))
+    n += 1
+
+    # SIW body — solid fill
+    cell.shapes(lm2).insert(box(X_VIA_START, y_bot, X_VIA_END, y_top, u))
+    n += 1
+
+    # Right taper
+    cell.shapes(lm2).insert(poly([
+        (X_SIW_END,    y_bot),
+        (X_SIW_END,    y_top),
+        (X_RTAPER_END, y_center + FEED_WIDTH/2),
+        (X_RTAPER_END, y_center - FEED_WIDTH/2),
+    ], u))
+    n += 1
+
+    # Right feed
+    cell.shapes(lm2).insert(box(X_RTAPER_END, y_center - FEED_WIDTH/2,
+                                   X_TOTAL, y_center + FEED_WIDTH/2, u))
+    n += 1
+
+    # Via circles
+    via_count = 0
+    x = X_VIA_START
+    while x <= X_VIA_END + 1e-6:
+        cell.shapes(lvia).insert(circle(x, y_top, VIA_RADIUS, VIA_SEGMENTS, u))
+        cell.shapes(lvia).insert(circle(x, y_bot, VIA_RADIUS, VIA_SEGMENTS, u))
+        x += VIA_PITCH
+        via_count += 2
+    n += via_count
+
+    print(f"[{label}] y_center={y_center:.2f}  vias={via_count}  shapes={n}")
+    return n
+
 # ===========================================================================
 # MAIN
 # ===========================================================================
@@ -105,7 +161,7 @@ def run():
         cell.clear()
         print(f"Cleared cell: {cell.name}")
     else:
-        cell = layout.create_cell("SIW_SOLID")
+        cell = layout.create_cell("SIW_SOLID_CROSSTALK")
         cv.cell_name = cell.name
         print(f"Created cell: {cell.name}")
 
@@ -117,82 +173,40 @@ def run():
     n = 0
 
     # -----------------------------------------------------------------------
-    # 1. M1 — solid ground plane
+    # 1. M1 — single shared ground plane
     # -----------------------------------------------------------------------
     cell.shapes(lm1).insert(box(0, M1_Y_BOT, X_TOTAL, M1_Y_TOP, u))
     n += 1
     print(f"[m1] Ground plane: {X_TOTAL:.2f} x {M1_Y_TOP - M1_Y_BOT:.2f} mm")
+    print(f"     y={M1_Y_BOT:.2f} to {M1_Y_TOP:.2f}")
 
     # -----------------------------------------------------------------------
-    # 2. M2 — left microstrip feed
+    # 2. Aggressor waveguide (bottom)
     # -----------------------------------------------------------------------
-    cell.shapes(lm2).insert(box(0, -FEED_WIDTH/2, X_FEED_END, FEED_WIDTH/2, u))
-    n += 1
-    print(f"[m2] Left feed: x=0 to {X_FEED_END:.2f}")
+    print(f"\nAggressor (bottom):")
+    n += draw_siw_solid(cell, lm2, lvia, AGG_Y_CENTER, u, "aggressor")
 
     # -----------------------------------------------------------------------
-    # 3. M2 — left taper
+    # 3. Victim waveguide (top)
     # -----------------------------------------------------------------------
-    cell.shapes(lm2).insert(poly([
-        (X_FEED_END,  -FEED_WIDTH/2),
-        (X_FEED_END,   FEED_WIDTH/2),
-        (X_TAPER_END,  Y_TOP_ROW),
-        (X_TAPER_END,  Y_BOT_ROW),
-    ], u))
-    n += 1
-    print(f"[m2] Left taper: x={X_FEED_END:.2f} to {X_TAPER_END:.2f}")
-
-    # -----------------------------------------------------------------------
-    # 4. M2 — SIW body solid fill (no slots)
-    # -----------------------------------------------------------------------
-    cell.shapes(lm2).insert(box(X_VIA_START, Y_BOT_ROW, X_VIA_END, Y_TOP_ROW, u))
-    n += 1
-    print(f"[m2] SIW body solid: x={X_VIA_START:.2f} to {X_VIA_END:.2f}, "
-          f"y={Y_BOT_ROW:.2f} to {Y_TOP_ROW:.2f}")
-
-    # -----------------------------------------------------------------------
-    # 5. M2 — right taper
-    # -----------------------------------------------------------------------
-    cell.shapes(lm2).insert(poly([
-        (X_SIW_END,    Y_BOT_ROW),
-        (X_SIW_END,    Y_TOP_ROW),
-        (X_RTAPER_END, FEED_WIDTH/2),
-        (X_RTAPER_END, -FEED_WIDTH/2),
-    ], u))
-    n += 1
-    print(f"[m2] Right taper: x={X_SIW_END:.2f} to {X_RTAPER_END:.2f}")
-
-    # -----------------------------------------------------------------------
-    # 6. M2 — right microstrip feed
-    # -----------------------------------------------------------------------
-    cell.shapes(lm2).insert(box(X_RTAPER_END, -FEED_WIDTH/2, X_TOTAL, FEED_WIDTH/2, u))
-    n += 1
-    print(f"[m2] Right feed: x={X_RTAPER_END:.2f} to {X_TOTAL:.2f}")
-
-    # -----------------------------------------------------------------------
-    # 7. VIA1 — two rows of circles
-    # -----------------------------------------------------------------------
-    via_count = 0
-    x = X_VIA_START
-    while x <= X_VIA_END + 1e-6:
-        cell.shapes(lvia).insert(circle(x, Y_TOP_ROW, VIA_RADIUS, VIA_SEGMENTS, u))
-        cell.shapes(lvia).insert(circle(x, Y_BOT_ROW, VIA_RADIUS, VIA_SEGMENTS, u))
-        x += VIA_PITCH
-        via_count += 2
-    n += via_count
-    print(f"[via1] {via_count} circles ({via_count//2} per row)")
+    print(f"\nVictim (top):")
+    n += draw_siw_solid(cell, lm2, lvia, VIC_Y_CENTER, u, "victim")
 
     mw.current_view().zoom_fit()
 
     print("\n" + "=" * 55)
-    print("  SUCCESS — SIW Solid (no slots)")
+    print("  SUCCESS — SIW Solid Crosstalk Layout")
     print("=" * 55)
-    print(f"  Total length  : {X_TOTAL:.1f} mm")
-    print(f"  SIW width     : {SIW_WIDTH:.1f} mm")
-    print(f"  Feed width    : {FEED_WIDTH:.1f} mm")
-    print(f"  Taper length  : {TAPER_LENGTH:.1f} mm")
-    print(f"  Via pitch/d   : {VIA_PITCH}/{VIA_DIAMETER} mm")
-    print(f"  Total shapes  : {n}")
+    print(f"  Total length       : {X_TOTAL:.1f} mm")
+    print(f"  SIW width          : {SIW_WIDTH:.1f} mm")
+    print(f"  Feed width         : {FEED_WIDTH:.1f} mm")
+    print(f"  Taper length       : {TAPER_LENGTH:.1f} mm")
+    print(f"  Waveguide sep.     : {WAVEGUIDE_SEPARATION:.1f} mm  <- vary for sweep")
+    print(f"  Aggressor y_center : {AGG_Y_CENTER:.2f} mm")
+    print(f"  Victim y_center    : {VIC_Y_CENTER:.2f} mm")
+    print(f"  Total shapes       : {n}")
+    print("=" * 55)
+    print("  CROSSTALK SWEEP: change WAVEGUIDE_SEPARATION and rerun")
     print("=" * 55)
 
 run()
