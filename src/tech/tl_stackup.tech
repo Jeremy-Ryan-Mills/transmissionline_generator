@@ -1,0 +1,12 @@
+// Tech file for AEDT GDS import
+// Units are nm
+//
+// Label        Color       Elv       Thk
+1              red         0         35000
+prepreg1        green       35000     210400
+Int1_GND        orange      245400    15200
+core            blue        260600    1065000
+Int2            orange      1325600   15200
+prepreg2        green       1340800   210400
+2              red         1551200   35000
+via1            yellow      0         1586200
